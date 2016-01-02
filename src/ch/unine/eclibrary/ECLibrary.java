@@ -89,7 +89,7 @@ public class ECLibrary {
         System.arraycopy(originalData, 0, paddedData, 0, originalLen);
 
         // 1. allocate memory for original data
-        Pointer dataPtr = new Memory(newLen * Native.getNativeSize(Byte.TYPE));
+        Memory dataPtr = new Memory(newLen * Native.getNativeSize(Byte.TYPE));
         // 2. write padded data to that memory
         dataPtr.write(0, paddedData, 0, newLen);
         //System.out.println(Arrays.equals(paddedData, dataPtr.getByteArray(0, newLen)));
@@ -98,11 +98,13 @@ public class ECLibrary {
         // 3. divide original data into k blocks
         Pointer[] dataPtrs = new Pointer[k];
         int blockSize = newLen / k;
+        //Pointer reconstructed = new Memory(newLen * Native.getNativeSize(Byte.TYPE));
         for (int i = 0; i < k; i++) {
             //System.out.println(i + " " + i * blockSize);
-            dataPtrs[i] = dataPtr.getPointer(i * blockSize);
+            dataPtrs[i] = dataPtr.share(i * blockSize);
+            //reconstructed.write(i*blockSize, dataPtrs[i].getByteArray(0,blockSize), 0, blockSize);
         }
-
+        //System.out.println(Arrays.equals(dataPtr.getByteArray(0,newLen),reconstructed.getByteArray(0,newLen)));
 
         // reserve memory for the recovery blocks
         Pointer recoveryBlocks = new Memory (blockSize * m * Native.getNativeSize(Byte.TYPE));
@@ -115,24 +117,31 @@ public class ECLibrary {
         for (int i = 0; i < k + m; i++) {
             blocks[i] = new Block.ByReference();
         }
-        System.out.println("num encoded blocks: " + blocks.length);
+        //System.out.println("num encoded blocks: " + blocks.length);
         assert(blocks.length == k + m);
 
-        Pointer result = new Memory(newLen * Native.getNativeSize(Byte.TYPE));;
+        //Pointer reconstructed = new Memory(blockSize * (k + m) * Native.getNativeSize(Byte.TYPE));
         for(int i = 0; i < k; i++) {
-            blocks[i].data = dataPtrs[i];
+            blocks[i].data = dataPtrs[i].share(0);
             blocks[i].row = (char)i;
+            //reconstructed.write(i * blockSize, blocks[i].data.getByteArray(0, blockSize), 0, blockSize);
         }
-        for (int i = 0; i < m; ++i) {
-            blocks[k + i].data = recoveryBlocks.getPointer(i * blockSize);
+        //System.out.println(Arrays.equals(dataPtr.getByteArray(0,newLen),reconstructed.getByteArray(0,newLen)));
+        for (int i = 0; i < m; i++) {
+            blocks[k + i].data = recoveryBlocks.share(i * blockSize);
             blocks[k + i].row = (char)i;
+            //reconstructed.write(k + i * blockSize, blocks[k + i].data.getByteArray(0, blockSize), 0, blockSize);
         }
 
         assert(Longhair.INSTANCE.cauchy_256_decode(k, m, blocks, blockSize) == 0);
 
-        /*for (int i = 0; i < k; ++i) {
-            System.out.println((int)blocks[i].row);
-            System.out.println(blocks[i].data.getByteArray(i * blockSize, blockSize));
-        }*/
+        //System.out.println(blocks.length);
+        Pointer reconstructed = new Memory(blockSize * k * Native.getNativeSize(Byte.TYPE));
+        for (int i = 0; i < k; i++) {
+            //System.out.println((int)blocks[i].row);
+            reconstructed.write(i * blockSize, blocks[i].data.getByteArray(0, blockSize), 0, blockSize);
+        }
+        //System.out.println(Arrays.equals(dataPtr.getByteArray(0,newLen),reconstructed.getByteArray(0,newLen)));
+        System.out.println(new String(reconstructed.getByteArray(0,originalLen), StandardCharsets.UTF_8));
     }
 }
