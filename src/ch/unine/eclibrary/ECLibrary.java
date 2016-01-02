@@ -3,10 +3,13 @@ package ch.unine.eclibrary;
 import com.sun.jna.*;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -23,6 +26,7 @@ public class ECLibrary {
          */
         int _cauchy_256_init();
 
+        //int cauchy_256_encode(int k, int m, const unsigned char *data_ptrs[], void *recovery_blocks, int block_bytes);
         /**
          *
          * @param k data blocks
@@ -30,14 +34,24 @@ public class ECLibrary {
          * @param block_bytes number of bytes per block; multiple of 8
          * @return zero on success, another value indicates failure.
          */
-        //int cauchy_256_encode(int k, int m, const unsigned char *data_ptrs[], void *recovery_blocks, int block_bytes);
-        int cauchy_256_encode(int k, int m, String[] data_ptrs, Pointer recovery_blocks, int block_bytes);
+        int cauchy_256_encode(int k, int m, Pointer[] data_ptrs, Pointer recovery_blocks, int block_bytes);
+
+        //int cauchy_256_decode(int k, int m, Block *blocks, int block_bytes);
+        /**
+         * Recover original data
+         * @param k num of original blocks
+         * @param m num of recovery blocks
+         * @param blocks blocks of data, original or recovery
+         * @param blockBytes number of bytes per block; multiple of 8
+         * @return 0 on success, otherwise failure
+         */
+        int cauchy_256_decode(int k, int m, Block[] blocks, int blockBytes);
     }
 
     public static class Block extends Structure {
         public static class ByReference extends Block implements Structure.ByReference {}
 
-        public String data; // unsigned char *data
+        public Pointer data; // unsigned char *data
         public char row; // unsigned char row
 
         @Override
@@ -53,18 +67,17 @@ public class ECLibrary {
             System.exit(1);
         }
 
-        /* k - num of original blocks */
+        // k - num of original blocks
         final int k = 3;
         assert(k >= 0 && k < 256);
 
-        /* m - num of recovery blocks */
+        // m - num of recovery blocks
         final int m = 2;
         assert(m >= 0 && m <= 256 - k);
 
-        /* data ptrs */
-
         // original data as bytes
         byte[] originalData = "hello, world!".getBytes();
+        //System.out.println(new String(originalData, StandardCharsets.UTF_8));
 
         // compute length of each block
         int originalLen = originalData.length;
@@ -74,38 +87,52 @@ public class ECLibrary {
         }
         byte[] paddedData = new byte[newLen];
         System.arraycopy(originalData, 0, paddedData, 0, originalLen);
-        System.out.println("Original_len: " + originalLen + " New_len: " + newLen);
-        System.out.println("originalData.len: " + originalData.length + " paddedData.len: " + paddedData.length);
 
+        // 1. allocate memory for original data
+        Pointer dataPtr = new Memory(newLen * Native.getNativeSize(Byte.TYPE));
+        // 2. write padded data to that memory
+        dataPtr.write(0, paddedData, 0, newLen);
+        //System.out.println(Arrays.equals(paddedData, dataPtr.getByteArray(0, newLen)));
+        //System.out.println(dataPtr.getByteArray(0, newLen).length);
 
-        // allocate memory for data pointers array + each data pointer
-        String[] dataPtrs = new String[k];
-        int bytesPerChunk = newLen / k;
-        assert (bytesPerChunk % 8 == 0);
-        System.out.println("bytesPerChunk: " + bytesPerChunk);
-        // split data intro chunks; add padding if necessary
-        for (int i = 0; i < k; ++i) {
-            int pos = i * bytesPerChunk;
-            dataPtrs[i] = Arrays.copyOfRange(paddedData, pos, pos + bytesPerChunk).toString();
-            System.out.println("i: " + i + " " + pos + " - " + pos + bytesPerChunk);
+        // 3. divide original data into k blocks
+        Pointer[] dataPtrs = new Pointer[k];
+        int blockSize = newLen / k;
+        for (int i = 0; i < k; i++) {
+            //System.out.println(i + " " + i * blockSize);
+            dataPtrs[i] = dataPtr.getPointer(i * blockSize);
         }
 
-        Pointer recoveryBlocks = new Memory (bytesPerChunk * m * Native.getNativeSize(Byte.TYPE));
-       assert(Longhair.INSTANCE.cauchy_256_encode(k,m, dataPtrs, recoveryBlocks, bytesPerChunk) == 0);
 
+        // reserve memory for the recovery blocks
+        Pointer recoveryBlocks = new Memory (blockSize * m * Native.getNativeSize(Byte.TYPE));
+
+        // encode!
+        assert(Longhair.INSTANCE.cauchy_256_encode(k,m, dataPtrs, recoveryBlocks, blockSize) == 0);
+
+        // encoded blocks
         Block.ByReference[] blocks = new Block.ByReference[k + m];
         for (int i = 0; i < k + m; i++) {
             blocks[i] = new Block.ByReference();
         }
-        System.out.println(blocks.length);
-        for(int i = 0; i < k; ++i) {
-            blocks[i].data = (String)dataPtrs[i];
+        System.out.println("num encoded blocks: " + blocks.length);
+        assert(blocks.length == k + m);
+
+        Pointer result = new Memory(newLen * Native.getNativeSize(Byte.TYPE));;
+        for(int i = 0; i < k; i++) {
+            blocks[i].data = dataPtrs[i];
             blocks[i].row = (char)i;
         }
-
         for (int i = 0; i < m; ++i) {
-            blocks[k + i].data = (String)(recoveryBlocks.toString() + i * bytesPerChunk);
-            blocks[k+ i].row = (char)i;
+            blocks[k + i].data = recoveryBlocks.getPointer(i * blockSize);
+            blocks[k + i].row = (char)i;
         }
+
+        assert(Longhair.INSTANCE.cauchy_256_decode(k, m, blocks, blockSize) == 0);
+
+        /*for (int i = 0; i < k; ++i) {
+            System.out.println((int)blocks[i].row);
+            System.out.println(blocks[i].data.getByteArray(i * blockSize, blockSize));
+        }*/
     }
 }
